@@ -17,12 +17,13 @@ create_or_update() {
 }
 
 create_or_update GEMINI_API_KEY "${GEMINI_API_KEY:?}"
+create_or_update CRYPTOCOMPARE_API_KEY "${CRYPTOCOMPARE_API_KEY:?}"
 create_or_update BINANCE_API_KEY "${BINANCE_API_KEY:-}"
 create_or_update BINANCE_API_SECRET "${BINANCE_API_SECRET:-}"
 create_or_update CRON_SECRET "${CRON_SECRET:?}"
 
 SA="${GCP_RUN_SERVICE_ACCOUNT:?Set GCP_RUN_SERVICE_ACCOUNT email}"
-for secret in GEMINI_API_KEY BINANCE_API_KEY BINANCE_API_SECRET CRON_SECRET; do
+for secret in GEMINI_API_KEY CRYPTOCOMPARE_API_KEY BINANCE_API_KEY BINANCE_API_SECRET CRON_SECRET; do
   gcloud secrets add-iam-policy-binding "$secret" \
     --member="serviceAccount:${SA}" \
     --role="roles/secretmanager.secretAccessor" \

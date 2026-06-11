@@ -43,8 +43,7 @@ jobs:
             --timeout 300 \
             --port 8787 \
             --service-account "${{ secrets.GCP_RUN_SERVICE_ACCOUNT }}" \
-            --set-env-vars "NODE_ENV=production,CORS_ORIGIN=${{ secrets.CORS_ORIGIN }},CANDLE_SYNC_ON_STARTUP=false,CANDLE_SYNC_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT,FIREBASE_USE_ADC=true,FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }}" \
-            --set-secrets "GEMINI_API_KEY=GEMINI_API_KEY:latest,BINANCE_API_KEY=BINANCE_API_KEY:latest,BINANCE_API_SECRET=BINANCE_API_SECRET:latest,CRON_SECRET=CRON_SECRET:latest"
+            --set-env-vars "NODE_ENV=production,CORS_ORIGIN=${{ secrets.CORS_ORIGIN }},CANDLE_SYNC_ON_STARTUP=${{ secrets.CANDLE_SYNC_ON_STARTUP }},CANDLE_SYNC_SYMBOLS=${{ secrets.CANDLE_SYNC_SYMBOLS }},FIREBASE_USE_ADC=true,FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }},GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }},BINANCE_API_KEY=${{ secrets.BINANCE_API_KEY }},BINANCE_API_SECRET=${{ secrets.BINANCE_API_SECRET }},CRON_SECRET=${{ secrets.CRON_SECRET }},CRYPTOCOMPARE_API_KEY=${{ secrets.CRYPTOCOMPARE_API_KEY }}"
 
       - name: Resolve service URL
         id: url
