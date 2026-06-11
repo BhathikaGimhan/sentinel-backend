@@ -87,10 +87,11 @@ jobs:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           CRYPTOCOMPARE_API_KEY: ${{ secrets.CRYPTOCOMPARE_API_KEY }}
         run: |
+          ORIGIN="${CORS_ORIGIN:-https://forex-market-ai.web.app,https://forex-market-ai.firebaseapp.com}"
           cat > /tmp/run-env.yaml <<EOF
           NODE_ENV: production
           FIREBASE_USE_ADC: "true"
-          CORS_ORIGIN: "${CORS_ORIGIN}"
+          CORS_ORIGIN: "${ORIGIN}"
           CANDLE_SYNC_ON_STARTUP: "${CANDLE_SYNC_ON_STARTUP}"
           CANDLE_SYNC_SYMBOLS: "${CANDLE_SYNC_SYMBOLS}"
           FIREBASE_PROJECT_ID: "${FIREBASE_PROJECT_ID}"
@@ -118,6 +119,25 @@ jobs:
             --service-account "${{ secrets.GCP_RUN_SERVICE_ACCOUNT }}" \
             --env-vars-file /tmp/run-env.yaml \
             --quiet
+
+      - name: Allow public HTTP access (fixes browser 403)
+        run: |
+          gcloud run services add-iam-policy-binding "$BACKEND_SERVICE" \
+            --region="$GCP_REGION" \
+            --project="$GCP_PROJECT_ID" \
+            --member="allUsers" \
+            --role="roles/run.invoker" \
+            --quiet
+          echo "Public invoker binding OK"
+
+      - name: Verify public health check
+        run: |
+          URL=$(gcloud run services describe "$BACKEND_SERVICE" \
+            --region "$GCP_REGION" \
+            --project "$GCP_PROJECT_ID" \
+            --format='value(status.url)')
+          curl -fsS "${URL}/health" | grep -q '"status":"ok"'
+          echo "Health check passed: ${URL}/health"
 
       - name: Resolve service URL
         id: url

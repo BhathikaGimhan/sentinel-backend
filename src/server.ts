@@ -19,6 +19,7 @@ import { initializeFirebaseAdmin } from './services/firebaseAdmin.js';
 import { FirebaseWriteBackService } from './services/firebaseWriteBack.js';
 import { CandleSyncService } from './services/candleSyncService.js';
 import { createCronRouter } from './routes/cron.js';
+import { createCorsOriginChecker, resolveCorsOrigins } from './config/corsConfig.js';
 
 async function bootstrap() {
   const keys = validateKeysOnStartup();
@@ -26,15 +27,15 @@ async function bootstrap() {
 
   const app = express();
   const port = Number(process.env.PORT ?? 8787);
-  const corsOriginRaw = process.env.CORS_ORIGIN ?? 'http://localhost:3000';
-  const corsOrigins = corsOriginRaw.split(',').map((o) => o.trim()).filter(Boolean);
+  const corsOrigins = resolveCorsOrigins();
+  const corsOptions = {
+    origin: createCorsOriginChecker(corsOrigins),
+    credentials: true,
+    methods: ['GET', 'POST', 'OPTIONS'],
+  };
 
-  app.use(
-    cors({
-      origin: corsOrigins.length === 1 ? corsOrigins[0] : corsOrigins,
-      methods: ['GET', 'POST', 'OPTIONS'],
-    })
-  );
+  app.use(cors(corsOptions));
+  app.options('*', cors(corsOptions));
   app.use(express.json({ limit: '256kb' }));
 
   app.get('/health', (_req, res) => {
@@ -77,8 +78,9 @@ async function bootstrap() {
   const httpServer = createServer(app);
   const io = new SocketIOServer(httpServer, {
     cors: {
-      origin: corsOrigins.length === 1 ? corsOrigins[0] : corsOrigins,
+      origin: corsOrigins,
       methods: ['GET', 'POST'],
+      credentials: true,
     },
   });
 

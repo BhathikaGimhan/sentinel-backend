@@ -55,6 +55,20 @@ else
   echo "  Created: $AR_REPO"
 fi
 
+echo "=== 5. Allow public browser access to Cloud Run ==="
+BACKEND_SERVICE="${BACKEND_SERVICE:-sentinel-backend-relay}"
+if gcloud run services describe "$BACKEND_SERVICE" --region="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+  gcloud run services add-iam-policy-binding "$BACKEND_SERVICE" \
+    --region="$REGION" \
+    --project="$PROJECT_ID" \
+    --member="allUsers" \
+    --role="roles/run.invoker" \
+    --quiet
+  echo "  Public invoker OK: $BACKEND_SERVICE"
+else
+  echo "  Skip (service not deployed yet): $BACKEND_SERVICE — deploy workflow will set this"
+fi
+
 echo ""
 echo "=== Done ==="
 echo "Re-run GitHub Actions backend deploy."
