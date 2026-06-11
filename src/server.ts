@@ -26,11 +26,12 @@ async function bootstrap() {
 
   const app = express();
   const port = Number(process.env.PORT ?? 8787);
-  const corsOrigin = process.env.CORS_ORIGIN ?? 'http://localhost:3000';
+  const corsOriginRaw = process.env.CORS_ORIGIN ?? 'http://localhost:3000';
+  const corsOrigins = corsOriginRaw.split(',').map((o) => o.trim()).filter(Boolean);
 
   app.use(
     cors({
-      origin: corsOrigin,
+      origin: corsOrigins.length === 1 ? corsOrigins[0] : corsOrigins,
       methods: ['GET', 'POST', 'OPTIONS'],
     })
   );
@@ -76,7 +77,7 @@ async function bootstrap() {
   const httpServer = createServer(app);
   const io = new SocketIOServer(httpServer, {
     cors: {
-      origin: corsOrigin,
+      origin: corsOrigins.length === 1 ? corsOrigins[0] : corsOrigins,
       methods: ['GET', 'POST'],
     },
   });
@@ -110,7 +111,7 @@ async function bootstrap() {
   httpServer.listen(port, () => {
     console.info(`[Sentinel Backend] Listening on http://localhost:${port}`);
     console.info(`[Sentinel Backend] Socket.IO market relay + trade execution active`);
-    console.info(`[Sentinel Backend] CORS origin: ${corsOrigin}`);
+    console.info(`[Sentinel Backend] CORS origin: ${corsOrigins.join(', ')}`);
     if (candleSyncService) {
       console.info(
         `[Sentinel Backend] Candle sync API: POST /api/cron/candle-sync (symbols: ${candleSyncService.getSymbols().join(', ')})`
