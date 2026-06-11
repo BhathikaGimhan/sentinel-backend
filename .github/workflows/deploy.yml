@@ -29,6 +29,44 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
+      - name: Enable required GCP APIs
+        env:
+          GCP_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+        run: |
+          gcloud services enable \
+            run.googleapis.com \
+            cloudbuild.googleapis.com \
+            artifactregistry.googleapis.com \
+            cloudfunctions.googleapis.com \
+            cloudscheduler.googleapis.com \
+            --project="$GCP_PROJECT_ID"
+
+      - name: Write Cloud Run env file
+        env:
+          CORS_ORIGIN: ${{ secrets.CORS_ORIGIN }}
+          CANDLE_SYNC_ON_STARTUP: ${{ secrets.CANDLE_SYNC_ON_STARTUP }}
+          CANDLE_SYNC_SYMBOLS: ${{ secrets.CANDLE_SYNC_SYMBOLS }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          CRYPTOCOMPARE_API_KEY: ${{ secrets.CRYPTOCOMPARE_API_KEY }}
+        run: |
+          cat > /tmp/run-env.yaml <<EOF
+          NODE_ENV: production
+          FIREBASE_USE_ADC: "true"
+          CORS_ORIGIN: "${CORS_ORIGIN}"
+          CANDLE_SYNC_ON_STARTUP: "${CANDLE_SYNC_ON_STARTUP}"
+          CANDLE_SYNC_SYMBOLS: "${CANDLE_SYNC_SYMBOLS}"
+          FIREBASE_PROJECT_ID: "${FIREBASE_PROJECT_ID}"
+          GEMINI_API_KEY: "${GEMINI_API_KEY}"
+          BINANCE_API_KEY: "${BINANCE_API_KEY}"
+          BINANCE_API_SECRET: "${BINANCE_API_SECRET}"
+          CRON_SECRET: "${CRON_SECRET}"
+          CRYPTOCOMPARE_API_KEY: "${CRYPTOCOMPARE_API_KEY}"
+          EOF
+
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy "$BACKEND_SERVICE" \
@@ -43,7 +81,7 @@ jobs:
             --timeout 300 \
             --port 8787 \
             --service-account "${{ secrets.GCP_RUN_SERVICE_ACCOUNT }}" \
-            --set-env-vars "NODE_ENV=production,CORS_ORIGIN=${{ secrets.CORS_ORIGIN }},CANDLE_SYNC_ON_STARTUP=${{ secrets.CANDLE_SYNC_ON_STARTUP }},CANDLE_SYNC_SYMBOLS=${{ secrets.CANDLE_SYNC_SYMBOLS }},FIREBASE_USE_ADC=true,FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }},GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }},BINANCE_API_KEY=${{ secrets.BINANCE_API_KEY }},BINANCE_API_SECRET=${{ secrets.BINANCE_API_SECRET }},CRON_SECRET=${{ secrets.CRON_SECRET }},CRYPTOCOMPARE_API_KEY=${{ secrets.CRYPTOCOMPARE_API_KEY }}"
+            --env-vars-file /tmp/run-env.yaml
 
       - name: Resolve service URL
         id: url
@@ -51,6 +89,7 @@ jobs:
           URL=$(gcloud run services describe "$BACKEND_SERVICE" --region "$GCP_REGION" --format='value(status.url)')
           echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "Backend URL: $URL"
+          echo "::notice title=Backend URL::Set VITE_RELAY_URL and VITE_API_BASE_URL in frontend GitHub secrets to: $URL"
 
       - name: Create or update Cloud Scheduler (15M candles)
         env:
