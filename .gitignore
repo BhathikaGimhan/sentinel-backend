@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+!.env.example
+*.log
+.DS_Store
+forex-market-ai-firebase.json
+*-firebase.json

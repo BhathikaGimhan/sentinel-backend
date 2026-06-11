@@ -1,0 +1,81 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: backend-deploy-production
+  cancel-in-progress: false
+
+env:
+  GCP_REGION: ${{ secrets.GCP_REGION }}
+  BACKEND_SERVICE: sentinel-backend-relay
+
+jobs:
+  deploy:
+    name: Cloud Run + Scheduler
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "$BACKEND_SERVICE" \
+            --source . \
+            --region "$GCP_REGION" \
+            --platform managed \
+            --allow-unauthenticated \
+            --min-instances 0 \
+            --max-instances 5 \
+            --memory 512Mi \
+            --cpu 1 \
+            --timeout 300 \
+            --port 8787 \
+            --service-account "${{ secrets.GCP_RUN_SERVICE_ACCOUNT }}" \
+            --set-env-vars "NODE_ENV=production,CORS_ORIGIN=${{ secrets.CORS_ORIGIN }},CANDLE_SYNC_ON_STARTUP=false,CANDLE_SYNC_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT,FIREBASE_USE_ADC=true,FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }}" \
+            --set-secrets "GEMINI_API_KEY=GEMINI_API_KEY:latest,BINANCE_API_KEY=BINANCE_API_KEY:latest,BINANCE_API_SECRET=BINANCE_API_SECRET:latest,CRON_SECRET=CRON_SECRET:latest"
+
+      - name: Resolve service URL
+        id: url
+        run: |
+          URL=$(gcloud run services describe "$BACKEND_SERVICE" --region "$GCP_REGION" --format='value(status.url)')
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Backend URL: $URL"
+
+      - name: Create or update Cloud Scheduler (15M candles)
+        env:
+          BACKEND_URL: ${{ steps.url.outputs.url }}
+        run: |
+          set -euo pipefail
+          JOB_NAME="sentinel-candle-sync-15m"
+          URI="${BACKEND_URL}/api/cron/candle-sync"
+          CRON_HEADER="X-Cron-Secret=${{ secrets.CRON_SECRET }}"
+
+          if gcloud scheduler jobs describe "$JOB_NAME" --location="$GCP_REGION" >/dev/null 2>&1; then
+            gcloud scheduler jobs update http "$JOB_NAME" \
+              --location="$GCP_REGION" \
+              --schedule="*/15 * * * *" \
+              --uri="$URI" \
+              --http-method=POST \
+              --update-headers="$CRON_HEADER"
+          else
+            gcloud scheduler jobs create http "$JOB_NAME" \
+              --location="$GCP_REGION" \
+              --schedule="*/15 * * * *" \
+              --uri="$URI" \
+              --http-method=POST \
+              --headers="$CRON_HEADER"
+          fi
+
+          echo "Scheduler active → $URI"
