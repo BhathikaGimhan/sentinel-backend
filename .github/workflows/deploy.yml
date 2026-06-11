@@ -11,6 +11,7 @@ concurrency:
 
 env:
   GCP_REGION: ${{ secrets.GCP_REGION }}
+  GCP_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
   BACKEND_SERVICE: sentinel-backend-relay
 
 jobs:
@@ -29,9 +30,10 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
+      - name: Configure gcloud project
+        run: gcloud config set project "$GCP_PROJECT_ID"
+
       - name: Enable required GCP APIs
-        env:
-          GCP_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
         run: |
           gcloud services enable \
             run.googleapis.com \
@@ -39,7 +41,23 @@ jobs:
             artifactregistry.googleapis.com \
             cloudfunctions.googleapis.com \
             cloudscheduler.googleapis.com \
-            --project="$GCP_PROJECT_ID"
+            --project="$GCP_PROJECT_ID" \
+            --quiet
+
+      - name: Ensure Artifact Registry repo exists
+        run: |
+          if gcloud artifacts repositories describe cloud-run-source-deploy \
+            --location="$GCP_REGION" \
+            --project="$GCP_PROJECT_ID" >/dev/null 2>&1; then
+            echo "Artifact Registry repo OK"
+          else
+            gcloud artifacts repositories create cloud-run-source-deploy \
+              --repository-format=docker \
+              --location="$GCP_REGION" \
+              --project="$GCP_PROJECT_ID" \
+              --description="Cloud Run source deploy containers" \
+              --quiet
+          fi
 
       - name: Write Cloud Run env file
         env:
@@ -72,6 +90,7 @@ jobs:
           gcloud run deploy "$BACKEND_SERVICE" \
             --source . \
             --region "$GCP_REGION" \
+            --project "$GCP_PROJECT_ID" \
             --platform managed \
             --allow-unauthenticated \
             --min-instances 0 \
@@ -81,12 +100,16 @@ jobs:
             --timeout 300 \
             --port 8787 \
             --service-account "${{ secrets.GCP_RUN_SERVICE_ACCOUNT }}" \
-            --env-vars-file /tmp/run-env.yaml
+            --env-vars-file /tmp/run-env.yaml \
+            --quiet
 
       - name: Resolve service URL
         id: url
         run: |
-          URL=$(gcloud run services describe "$BACKEND_SERVICE" --region "$GCP_REGION" --format='value(status.url)')
+          URL=$(gcloud run services describe "$BACKEND_SERVICE" \
+            --region "$GCP_REGION" \
+            --project "$GCP_PROJECT_ID" \
+            --format='value(status.url)')
           echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "Backend URL: $URL"
           echo "::notice title=Backend URL::Set VITE_RELAY_URL and VITE_API_BASE_URL in frontend GitHub secrets to: $URL"
@@ -100,20 +123,24 @@ jobs:
           URI="${BACKEND_URL}/api/cron/candle-sync"
           CRON_HEADER="X-Cron-Secret=${{ secrets.CRON_SECRET }}"
 
-          if gcloud scheduler jobs describe "$JOB_NAME" --location="$GCP_REGION" >/dev/null 2>&1; then
+          if gcloud scheduler jobs describe "$JOB_NAME" --location="$GCP_REGION" --project="$GCP_PROJECT_ID" >/dev/null 2>&1; then
             gcloud scheduler jobs update http "$JOB_NAME" \
               --location="$GCP_REGION" \
+              --project="$GCP_PROJECT_ID" \
               --schedule="*/15 * * * *" \
               --uri="$URI" \
               --http-method=POST \
-              --update-headers="$CRON_HEADER"
+              --update-headers="$CRON_HEADER" \
+              --quiet
           else
             gcloud scheduler jobs create http "$JOB_NAME" \
               --location="$GCP_REGION" \
+              --project="$GCP_PROJECT_ID" \
               --schedule="*/15 * * * *" \
               --uri="$URI" \
               --http-method=POST \
-              --headers="$CRON_HEADER"
+              --headers="$CRON_HEADER" \
+              --quiet
           fi
 
           echo "Scheduler active → $URI"
