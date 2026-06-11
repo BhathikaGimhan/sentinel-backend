@@ -35,7 +35,6 @@ async function bootstrap() {
   };
 
   app.use(cors(corsOptions));
-  app.options('*', cors(corsOptions));
   app.use(express.json({ limit: '256kb' }));
 
   app.get('/health', (_req, res) => {

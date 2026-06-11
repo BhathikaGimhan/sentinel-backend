@@ -109,7 +109,7 @@ jobs:
             --region "$GCP_REGION" \
             --project "$GCP_PROJECT_ID" \
             --platform managed \
-            --allow-unauthenticated \
+            --no-allow-unauthenticated \
             --min-instances 0 \
             --max-instances 5 \
             --memory 512Mi \
@@ -122,13 +122,17 @@ jobs:
 
       - name: Allow public HTTP access (fixes browser 403)
         run: |
-          gcloud run services add-iam-policy-binding "$BACKEND_SERVICE" \
+          if gcloud run services add-iam-policy-binding "$BACKEND_SERVICE" \
             --region="$GCP_REGION" \
             --project="$GCP_PROJECT_ID" \
             --member="allUsers" \
             --role="roles/run.invoker" \
-            --quiet
-          echo "Public invoker binding OK"
+            --quiet; then
+            echo "Public invoker binding OK"
+          else
+            echo "::warning::Could not grant allUsers run.invoker — run manually as project Owner in Cloud Shell:"
+            echo "gcloud run services add-iam-policy-binding $BACKEND_SERVICE --region=$GCP_REGION --member=allUsers --role=roles/run.invoker"
+          fi
 
       - name: Verify public health check
         run: |
