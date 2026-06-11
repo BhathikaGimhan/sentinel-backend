@@ -13,6 +13,7 @@ env:
   GCP_REGION: ${{ secrets.GCP_REGION }}
   GCP_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
   BACKEND_SERVICE: sentinel-backend-relay
+  AR_REPO: sentinel-backend
 
 jobs:
   deploy:
@@ -37,27 +38,42 @@ jobs:
         run: |
           gcloud services enable \
             run.googleapis.com \
-            cloudbuild.googleapis.com \
             artifactregistry.googleapis.com \
-            cloudfunctions.googleapis.com \
             cloudscheduler.googleapis.com \
             --project="$GCP_PROJECT_ID" \
             --quiet
 
+      - name: Verify deploy IAM (fail fast with clear message)
+        run: |
+          set -euo pipefail
+          ACTIVE="$(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
+          echo "Deploying as: $ACTIVE"
+          gcloud artifacts repositories list --location="$GCP_REGION" --project="$GCP_PROJECT_ID" --limit=1 >/dev/null
+          gcloud run services list --region="$GCP_REGION" --project="$GCP_PROJECT_ID" --limit=1 >/dev/null
+
       - name: Ensure Artifact Registry repo exists
         run: |
-          if gcloud artifacts repositories describe cloud-run-source-deploy \
+          if gcloud artifacts repositories describe "$AR_REPO" \
             --location="$GCP_REGION" \
             --project="$GCP_PROJECT_ID" >/dev/null 2>&1; then
-            echo "Artifact Registry repo OK"
+            echo "Artifact Registry repo OK: $AR_REPO"
           else
-            gcloud artifacts repositories create cloud-run-source-deploy \
+            gcloud artifacts repositories create "$AR_REPO" \
               --repository-format=docker \
               --location="$GCP_REGION" \
               --project="$GCP_PROJECT_ID" \
-              --description="Cloud Run source deploy containers" \
+              --description="Sentinel backend containers" \
               --quiet
           fi
+
+      - name: Build and push container image
+        env:
+          IMAGE: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.FIREBASE_PROJECT_ID }}/sentinel-backend/${{ env.BACKEND_SERVICE }}:${{ github.sha }}
+        run: |
+          gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
       - name: Write Cloud Run env file
         env:
@@ -88,7 +104,7 @@ jobs:
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy "$BACKEND_SERVICE" \
-            --source . \
+            --image "$IMAGE" \
             --region "$GCP_REGION" \
             --project "$GCP_PROJECT_ID" \
             --platform managed \
