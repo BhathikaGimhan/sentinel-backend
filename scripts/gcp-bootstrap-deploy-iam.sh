@@ -22,6 +22,7 @@ gcloud services enable \
   run.googleapis.com \
   artifactregistry.googleapis.com \
   cloudscheduler.googleapis.com \
+  secretmanager.googleapis.com \
   --project="$PROJECT_ID"
 
 echo "=== 2. Grant GitHub Actions deployer project roles ==="
@@ -29,7 +30,8 @@ for role in \
   roles/run.admin \
   roles/artifactregistry.admin \
   roles/iam.serviceAccountUser \
-  roles/serviceusage.serviceUsageAdmin; do
+  roles/serviceusage.serviceUsageAdmin \
+  roles/secretmanager.admin; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:${DEPLOYER_SA}" \
     --role="$role" \
@@ -56,17 +58,32 @@ else
 fi
 
 echo "=== 5. Allow public browser access to Cloud Run ==="
+echo "  (Must run as Project Owner — GitHub Actions SA often cannot set allUsers)"
 BACKEND_SERVICE="${BACKEND_SERVICE:-sentinel-backend-relay}"
 if gcloud run services describe "$BACKEND_SERVICE" --region="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
-  gcloud run services add-iam-policy-binding "$BACKEND_SERVICE" \
+  if gcloud run services add-iam-policy-binding "$BACKEND_SERVICE" \
     --region="$REGION" \
     --project="$PROJECT_ID" \
     --member="allUsers" \
     --role="roles/run.invoker" \
-    --quiet
-  echo "  Public invoker OK: $BACKEND_SERVICE"
+    --quiet; then
+    echo "  Public invoker OK: $BACKEND_SERVICE"
+  else
+    echo "  FAILED — run manually in Cloud Console → Cloud Run → $BACKEND_SERVICE → Security → Allow unauthenticated"
+  fi
 else
-  echo "  Skip (service not deployed yet): $BACKEND_SERVICE — deploy workflow will set this"
+  echo "  Skip (service not deployed yet): $BACKEND_SERVICE"
+fi
+
+echo ""
+echo "=== 6. Verify public health ==="
+if gcloud run services describe "$BACKEND_SERVICE" --region="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+  URL="$(gcloud run services describe "$BACKEND_SERVICE" --region="$REGION" --format='value(status.url)')"
+  if curl -fsS "${URL}/health" | grep -q '"status":"ok"'; then
+    echo "  OK: ${URL}/health"
+  else
+    echo "  Still 403 — enable public access in Cloud Console (see step 5)"
+  fi
 fi
 
 echo ""

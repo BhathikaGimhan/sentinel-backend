@@ -7,6 +7,7 @@
 
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import type { CandleSyncService } from '../services/candleSyncService.js';
+import type { NewsSyncService } from '../services/newsSyncService.js';
 
 function verifyCronSecret(req: Request, res: Response, next: NextFunction): void {
   const secret = process.env.CRON_SECRET?.trim();
@@ -34,13 +35,16 @@ function verifyCronSecret(req: Request, res: Response, next: NextFunction): void
   next();
 }
 
-export function createCronRouter(candleSyncService: CandleSyncService): Router {
+export function createCronRouter(
+  candleSyncService: CandleSyncService,
+  newsSyncService?: NewsSyncService
+): Router {
   const router = Router();
 
   router.get('/health', (_req, res) => {
     res.json({
       ok: true,
-      jobs: ['candle-sync'],
+      jobs: ['candle-sync', ...(newsSyncService ? ['news-sync'] : [])],
       symbols: candleSyncService.getSymbols(),
     });
   });
@@ -57,6 +61,20 @@ export function createCronRouter(candleSyncService: CandleSyncService): Router {
       res.status(409).json({ ok: false, error: message });
     }
   });
+
+  if (newsSyncService) {
+    router.post('/news-sync', verifyCronSecret, async (_req, res) => {
+      try {
+        const result = await newsSyncService.syncFromUpstream();
+        const status = result.ok ? 200 : result.skipped ? 200 : 502;
+        res.status(status).json(result);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'News sync failed';
+        console.error('[Cron] /news-sync error:', message);
+        res.status(409).json({ ok: false, error: message });
+      }
+    });
+  }
 
   return router;
 }

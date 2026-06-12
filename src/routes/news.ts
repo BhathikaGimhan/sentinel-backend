@@ -2,50 +2,65 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * Proxy external news APIs — avoids browser CORS blocks in dev/production.
- * CryptoCompare requires an API key (free tier): https://www.cryptocompare.com/cryptopian/api-keys
+ * Serves cached news from memory (populated by cron → CryptoCompare → Firestore).
+ * User requests never hit CryptoCompare or Firestore.
  */
 
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
+import type { NewsSyncService } from '../services/newsSyncService.js';
 
-const CRYPTOCOMPARE_NEWS_URL = 'https://min-api.cryptocompare.com/data/v2/news/?lang=EN';
+const CACHE_MAX_AGE_SEC = 300;
 
-function getCryptoCompareApiKey(): string | undefined {
-  return process.env.CRYPTOCOMPARE_API_KEY?.trim() || undefined;
-}
+function serveCachedFeed(req: Request, res: Response, service: NewsSyncService): void {
+  const cache = service.getCachedPayload();
+  const etag = service.getEtag();
 
-export const newsRouter = Router();
+  if (etag) {
+    res.setHeader('ETag', etag);
+    const ifNoneMatch = req.header('If-None-Match');
+    if (ifNoneMatch === etag) {
+      res.status(304).end();
+      return;
+    }
+  }
 
-newsRouter.get('/cryptocompare', async (_req, res) => {
-  const apiKey = getCryptoCompareApiKey();
-  if (!apiKey) {
+  res.setHeader('Cache-Control', `public, max-age=${CACHE_MAX_AGE_SEC}, stale-while-revalidate=60`);
+
+  if (!cache || cache.Data.length === 0) {
     res.status(503).json({
-      error:
-        'CryptoCompare API key not configured. Set CRYPTOCOMPARE_API_KEY in sentinel-backend-relay/.env',
+      error: 'News feed not ready. Cron sync will populate shortly.',
     });
     return;
   }
 
-  try {
-    const response = await fetch(CRYPTOCOMPARE_NEWS_URL, {
-      headers: {
-        'User-Agent': 'sentinel-backend-relay/1.0',
-        Authorization: `Apikey ${apiKey}`,
-      },
-    });
+  res.json({
+    Data: cache.Data,
+    syncedAt: cache.syncedAt,
+    HasWarning: false,
+    Type: 100,
+    source: 'cache',
+  });
+}
 
-    if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      console.error('[News] CryptoCompare upstream error:', response.status, body.slice(0, 200));
-      res.status(502).json({ error: `CryptoCompare returned ${response.status}` });
+export function createNewsRouter(newsSyncService: NewsSyncService | null): Router {
+  const router = Router();
+
+  router.get('/feed', (req, res) => {
+    if (!newsSyncService) {
+      res.status(503).json({ error: 'News service unavailable (Firebase not configured)' });
       return;
     }
+    serveCachedFeed(req, res, newsSyncService);
+  });
 
-    const data = await response.json();
-    res.json(data);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'News proxy failed';
-    console.error('[News] CryptoCompare proxy error:', message);
-    res.status(502).json({ error: message });
-  }
-});
+  /** @deprecated Use /feed — kept for existing frontend paths */
+  router.get('/cryptocompare', (req, res) => {
+    if (!newsSyncService) {
+      res.status(503).json({ error: 'News service unavailable (Firebase not configured)' });
+      return;
+    }
+    serveCachedFeed(req, res, newsSyncService);
+  });
+
+  return router;
+}

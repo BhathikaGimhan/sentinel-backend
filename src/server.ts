@@ -10,7 +10,8 @@ import { Server as SocketIOServer } from 'socket.io';
 import { validateKeysOnStartup } from '../config/keys.js';
 import { validateBinanceOnStartup } from './services/binanceHealth.js';
 import { neuralRouter } from './routes/neural.js';
-import { newsRouter } from './routes/news.js';
+import { createNewsRouter } from './routes/news.js';
+import { NewsSyncService } from './services/newsSyncService.js';
 import { RelayService } from './services/relayService.js';
 import { ExecutionService } from './services/executionService.js';
 import { SpotExecutionService } from './services/spotExecutionService.js';
@@ -42,7 +43,6 @@ async function bootstrap() {
   });
 
   app.use('/api/neural', neuralRouter);
-  app.use('/api/news', newsRouter);
 
   const executionService = new ExecutionService();
   const spotExecutionService = new SpotExecutionService();
@@ -50,17 +50,21 @@ async function bootstrap() {
 
   let writeBackService: FirebaseWriteBackService | undefined;
   let candleSyncService: CandleSyncService | undefined;
+  let newsSyncService: NewsSyncService | undefined;
   try {
     const firestore = initializeFirebaseAdmin();
     writeBackService = new FirebaseWriteBackService(firestore);
     candleSyncService = new CandleSyncService(firestore);
+    newsSyncService = new NewsSyncService(firestore);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn(`[Sentinel Backend] Firebase services disabled: ${message}`);
   }
 
+  app.use('/api/news', createNewsRouter(newsSyncService ?? null));
+
   if (candleSyncService) {
-    app.use('/api/cron', createCronRouter(candleSyncService));
+    app.use('/api/cron', createCronRouter(candleSyncService, newsSyncService));
 
     if (process.env.CANDLE_SYNC_ON_STARTUP === 'true') {
       void candleSyncService.syncAll().catch((err: unknown) => {
@@ -68,6 +72,25 @@ async function bootstrap() {
         console.error('[CandleSync] Startup sync failed:', message);
       });
     }
+  }
+
+  if (newsSyncService) {
+    void (async () => {
+      const hydrated = await newsSyncService.hydrateFromFirestore();
+      const shouldSync =
+        process.env.NEWS_SYNC_ON_STARTUP === 'true' ||
+        (!hydrated && !newsSyncService.getCachedPayload());
+
+      if (shouldSync) {
+        const result = await newsSyncService.syncFromUpstream();
+        if (!result.ok && !result.skipped) {
+          console.error('[NewsSync] Startup sync failed:', result.error);
+        }
+      }
+    })().catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[NewsSync] Startup bootstrap failed:', message);
+    });
   }
 
   app.use((_req, res) => {
@@ -117,6 +140,9 @@ async function bootstrap() {
       console.info(
         `[Sentinel Backend] Candle sync API: POST /api/cron/candle-sync (symbols: ${candleSyncService.getSymbols().join(', ')})`
       );
+    }
+    if (newsSyncService) {
+      console.info('[Sentinel Backend] News feed: GET /api/news/feed (cached) · cron POST /api/cron/news-sync');
     }
   });
 }

@@ -40,8 +40,59 @@ jobs:
             run.googleapis.com \
             artifactregistry.googleapis.com \
             cloudscheduler.googleapis.com \
+            secretmanager.googleapis.com \
             --project="$GCP_PROJECT_ID" \
             --quiet
+
+      - name: Verify required GitHub secrets
+        run: |
+          set -euo pipefail
+          missing=0
+          if [ -z "${{ secrets.GEMINI_API_KEY }}" ]; then echo "::error::Missing GitHub secret: GEMINI_API_KEY"; missing=1; fi
+          if [ -z "${{ secrets.CRYPTOCOMPARE_API_KEY }}" ]; then echo "::error::Missing GitHub secret: CRYPTOCOMPARE_API_KEY"; missing=1; fi
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then echo "::error::Missing GitHub secret: CRON_SECRET"; missing=1; fi
+          if [ -z "${{ secrets.GCP_RUN_SERVICE_ACCOUNT }}" ]; then echo "::error::Missing GitHub secret: GCP_RUN_SERVICE_ACCOUNT"; missing=1; fi
+          if [ "$missing" -ne 0 ]; then exit 1; fi
+          echo "Required GitHub secrets present"
+
+      - name: Sync API keys to GCP Secret Manager
+        env:
+          RUN_SA: ${{ secrets.GCP_RUN_SERVICE_ACCOUNT }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CRYPTOCOMPARE_API_KEY: ${{ secrets.CRYPTOCOMPARE_API_KEY }}
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          upsert_secret() {
+            local name="$1"
+            local value="$2"
+            if [ -z "$value" ]; then
+              echo "Skip empty secret: $name"
+              return 0
+            fi
+            if gcloud secrets describe "$name" --project="$GCP_PROJECT_ID" >/dev/null 2>&1; then
+              printf '%s' "$value" | gcloud secrets versions add "$name" --project="$GCP_PROJECT_ID" --data-file=-
+            else
+              printf '%s' "$value" | gcloud secrets create "$name" \
+                --project="$GCP_PROJECT_ID" \
+                --replication-policy="automatic" \
+                --data-file=-
+              gcloud secrets add-iam-policy-binding "$name" \
+                --project="$GCP_PROJECT_ID" \
+                --member="serviceAccount:${RUN_SA}" \
+                --role="roles/secretmanager.secretAccessor" \
+                --quiet
+            fi
+            echo "Secret Manager OK: $name"
+          }
+
+          upsert_secret GEMINI_API_KEY "$GEMINI_API_KEY"
+          upsert_secret CRYPTOCOMPARE_API_KEY "$CRYPTOCOMPARE_API_KEY"
+          upsert_secret BINANCE_API_KEY "$BINANCE_API_KEY"
+          upsert_secret BINANCE_API_SECRET "$BINANCE_API_SECRET"
+          upsert_secret CRON_SECRET "$CRON_SECRET"
 
       - name: Verify deploy IAM (fail fast with clear message)
         run: |
@@ -75,17 +126,13 @@ jobs:
           docker push "$IMAGE"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
-      - name: Write Cloud Run env file
+      - name: Write Cloud Run env file (non-secret config only)
         env:
           CORS_ORIGIN: ${{ secrets.CORS_ORIGIN }}
           CANDLE_SYNC_ON_STARTUP: ${{ secrets.CANDLE_SYNC_ON_STARTUP }}
+          NEWS_SYNC_ON_STARTUP: ${{ secrets.NEWS_SYNC_ON_STARTUP }}
           CANDLE_SYNC_SYMBOLS: ${{ secrets.CANDLE_SYNC_SYMBOLS }}
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
-          BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          CRYPTOCOMPARE_API_KEY: ${{ secrets.CRYPTOCOMPARE_API_KEY }}
         run: |
           ORIGIN="${CORS_ORIGIN:-https://forex-market-ai.web.app,https://forex-market-ai.firebaseapp.com}"
           cat > /tmp/run-env.yaml <<EOF
@@ -93,23 +140,35 @@ jobs:
           FIREBASE_USE_ADC: "true"
           CORS_ORIGIN: "${ORIGIN}"
           CANDLE_SYNC_ON_STARTUP: "${CANDLE_SYNC_ON_STARTUP}"
+          NEWS_SYNC_ON_STARTUP: "${NEWS_SYNC_ON_STARTUP:-true}"
           CANDLE_SYNC_SYMBOLS: "${CANDLE_SYNC_SYMBOLS}"
           FIREBASE_PROJECT_ID: "${FIREBASE_PROJECT_ID}"
-          GEMINI_API_KEY: "${GEMINI_API_KEY}"
-          BINANCE_API_KEY: "${BINANCE_API_KEY}"
-          BINANCE_API_SECRET: "${BINANCE_API_SECRET}"
-          CRON_SECRET: "${CRON_SECRET}"
-          CRYPTOCOMPARE_API_KEY: "${CRYPTOCOMPARE_API_KEY}"
           EOF
 
       - name: Deploy to Cloud Run
         run: |
+          set -euo pipefail
+          SECRETS=""
+          for mapping in \
+            "GEMINI_API_KEY:GEMINI_API_KEY" \
+            "CRYPTOCOMPARE_API_KEY:CRYPTOCOMPARE_API_KEY" \
+            "CRON_SECRET:CRON_SECRET" \
+            "BINANCE_API_KEY:BINANCE_API_KEY" \
+            "BINANCE_API_SECRET:BINANCE_API_SECRET"; do
+            env_name="${mapping%%:*}"
+            sm_name="${mapping#*:}"
+            if gcloud secrets describe "$sm_name" --project="$GCP_PROJECT_ID" >/dev/null 2>&1; then
+              if [ -n "$SECRETS" ]; then SECRETS+=","; fi
+              SECRETS+="${env_name}=${sm_name}:latest"
+            fi
+          done
+
           gcloud run deploy "$BACKEND_SERVICE" \
             --image "$IMAGE" \
             --region "$GCP_REGION" \
             --project "$GCP_PROJECT_ID" \
             --platform managed \
-            --no-allow-unauthenticated \
+            --allow-unauthenticated \
             --min-instances 0 \
             --max-instances 5 \
             --memory 512Mi \
@@ -118,30 +177,44 @@ jobs:
             --port 8787 \
             --service-account "${{ secrets.GCP_RUN_SERVICE_ACCOUNT }}" \
             --env-vars-file /tmp/run-env.yaml \
+            --set-secrets="$SECRETS" \
             --quiet
 
       - name: Allow public HTTP access (fixes browser 403)
+        continue-on-error: true
+        id: public_access
         run: |
-          if gcloud run services add-iam-policy-binding "$BACKEND_SERVICE" \
+          set -euo pipefail
+          gcloud run services add-iam-policy-binding "$BACKEND_SERVICE" \
             --region="$GCP_REGION" \
             --project="$GCP_PROJECT_ID" \
             --member="allUsers" \
-            --role="roles/run.invoker" \
-            --quiet; then
-            echo "Public invoker binding OK"
-          else
-            echo "::warning::Could not grant allUsers run.invoker — run manually as project Owner in Cloud Shell:"
-            echo "gcloud run services add-iam-policy-binding $BACKEND_SERVICE --region=$GCP_REGION --member=allUsers --role=roles/run.invoker"
-          fi
+            --role="roles/run.invoker"
+          echo "Public invoker binding OK"
 
-      - name: Verify public health check
+      - name: Verify service health
         run: |
+          set -euo pipefail
           URL=$(gcloud run services describe "$BACKEND_SERVICE" \
             --region "$GCP_REGION" \
             --project "$GCP_PROJECT_ID" \
             --format='value(status.url)')
-          curl -fsS "${URL}/health" | grep -q '"status":"ok"'
-          echo "Health check passed: ${URL}/health"
+          echo "Service URL: $URL"
+
+          TOKEN="$(gcloud auth print-identity-token)"
+          curl -fsS -H "Authorization: Bearer ${TOKEN}" "${URL}/health" | grep -q '"status":"ok"'
+          echo "Authenticated health check passed (container is running)"
+
+          if curl -fsS "${URL}/health" | grep -q '"status":"ok"'; then
+            echo "Public health check passed"
+          else
+            echo "::warning title=Public access blocked::Deploy succeeded but browsers will get 403 until allUsers has roles/run.invoker."
+            echo "Run once as GCP Project Owner in Cloud Shell:"
+            echo "gcloud run services add-iam-policy-binding $BACKEND_SERVICE --region=$GCP_REGION --project=$GCP_PROJECT_ID --member=allUsers --role=roles/run.invoker"
+            if [ "${{ steps.public_access.outcome }}" != "success" ]; then
+              echo "GitHub Actions deployer could not set public IAM (org policy or missing Owner permission)."
+            fi
+          fi
 
       - name: Resolve service URL
         id: url
@@ -184,3 +257,34 @@ jobs:
           fi
 
           echo "Scheduler active → $URI"
+
+      - name: Create or update Cloud Scheduler (news feed)
+        env:
+          BACKEND_URL: ${{ steps.url.outputs.url }}
+        run: |
+          set -euo pipefail
+          JOB_NAME="sentinel-news-sync-10m"
+          URI="${BACKEND_URL}/api/cron/news-sync"
+          CRON_HEADER="X-Cron-Secret=${{ secrets.CRON_SECRET }}"
+
+          if gcloud scheduler jobs describe "$JOB_NAME" --location="$GCP_REGION" --project="$GCP_PROJECT_ID" >/dev/null 2>&1; then
+            gcloud scheduler jobs update http "$JOB_NAME" \
+              --location="$GCP_REGION" \
+              --project="$GCP_PROJECT_ID" \
+              --schedule="*/10 * * * *" \
+              --uri="$URI" \
+              --http-method=POST \
+              --update-headers="$CRON_HEADER" \
+              --quiet
+          else
+            gcloud scheduler jobs create http "$JOB_NAME" \
+              --location="$GCP_REGION" \
+              --project="$GCP_PROJECT_ID" \
+              --schedule="*/10 * * * *" \
+              --uri="$URI" \
+              --http-method=POST \
+              --headers="$CRON_HEADER" \
+              --quiet
+          fi
+
+          echo "News scheduler active → $URI (every 10 min)"
