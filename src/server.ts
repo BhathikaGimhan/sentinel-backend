@@ -19,7 +19,10 @@ import { createExecutionRouter } from './routes/execution.js';
 import { initializeFirebaseAdmin } from './services/firebaseAdmin.js';
 import { FirebaseWriteBackService } from './services/firebaseWriteBack.js';
 import { CandleSyncService } from './services/candleSyncService.js';
+import { UserAdminService } from './services/userAdminService.js';
 import { createCronRouter } from './routes/cron.js';
+import { createAuthRouter } from './routes/auth.js';
+import { createAdminRouter } from './routes/admin.js';
 import { createCorsOriginChecker, resolveCorsOrigins } from './config/corsConfig.js';
 
 async function bootstrap() {
@@ -51,17 +54,24 @@ async function bootstrap() {
   let writeBackService: FirebaseWriteBackService | undefined;
   let candleSyncService: CandleSyncService | undefined;
   let newsSyncService: NewsSyncService | undefined;
+  let userAdminService: UserAdminService | undefined;
   try {
     const firestore = initializeFirebaseAdmin();
     writeBackService = new FirebaseWriteBackService(firestore);
     candleSyncService = new CandleSyncService(firestore);
     newsSyncService = new NewsSyncService(firestore);
+    userAdminService = new UserAdminService(firestore);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn(`[Sentinel Backend] Firebase services disabled: ${message}`);
   }
 
   app.use('/api/news', createNewsRouter(newsSyncService ?? null));
+
+  if (userAdminService) {
+    app.use('/api/auth', createAuthRouter(userAdminService));
+    app.use('/api/admin', createAdminRouter(userAdminService));
+  }
 
   if (candleSyncService) {
     app.use('/api/cron', createCronRouter(candleSyncService, newsSyncService));
@@ -143,6 +153,9 @@ async function bootstrap() {
     }
     if (newsSyncService) {
       console.info('[Sentinel Backend] News feed: GET /api/news/feed (cached) · cron POST /api/cron/news-sync');
+    }
+    if (userAdminService) {
+      console.info('[Sentinel Backend] Auth: POST /api/auth/bootstrap · Admin: GET /api/admin/users');
     }
   });
 }

@@ -143,6 +143,8 @@ jobs:
           NEWS_SYNC_ON_STARTUP: "${NEWS_SYNC_ON_STARTUP:-true}"
           CANDLE_SYNC_SYMBOLS: "${CANDLE_SYNC_SYMBOLS}"
           FIREBASE_PROJECT_ID: "${FIREBASE_PROJECT_ID}"
+          ADMIN_EMAILS: "bgmaduragoda@gmail.com"
+          ADMIN_LOCAL_PARTS: "bgmaduragoda"
           EOF
 
       - name: Deploy to Cloud Run
