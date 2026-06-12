@@ -41,8 +41,31 @@ jobs:
             artifactregistry.googleapis.com \
             cloudscheduler.googleapis.com \
             secretmanager.googleapis.com \
+            firestore.googleapis.com \
+            identitytoolkit.googleapis.com \
             --project="$GCP_PROJECT_ID" \
             --quiet
+
+      - name: Grant Cloud Run runtime IAM (Firestore + Auth admin)
+        continue-on-error: true
+        id: runtime_iam
+        env:
+          RUN_SA: ${{ secrets.GCP_RUN_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          for role in roles/datastore.user roles/firebaseauth.admin; do
+            gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
+              --member="serviceAccount:${RUN_SA}" \
+              --role="$role" \
+              --quiet
+            echo "IAM OK: ${RUN_SA} → ${role}"
+          done
+
+      - name: Warn if runtime IAM step failed
+        if: steps.runtime_iam.outcome != 'success'
+        run: |
+          echo "::warning::Could not grant Firestore/Auth IAM to Cloud Run SA. Run as Owner:"
+          echo "bash scripts/gcp-fix-auth-iam.sh"
 
       - name: Verify required GitHub secrets
         run: |
@@ -133,8 +156,12 @@ jobs:
           NEWS_SYNC_ON_STARTUP: ${{ secrets.NEWS_SYNC_ON_STARTUP }}
           CANDLE_SYNC_SYMBOLS: ${{ secrets.CANDLE_SYNC_SYMBOLS }}
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          ADMIN_EMAILS: ${{ secrets.ADMIN_EMAILS }}
+          ADMIN_LOCAL_PARTS: ${{ secrets.ADMIN_LOCAL_PARTS }}
         run: |
           ORIGIN="${CORS_ORIGIN:-https://forex-market-ai.web.app,https://forex-market-ai.firebaseapp.com}"
+          ADMIN_EMAIL_LIST="${ADMIN_EMAILS:-bgmaduragoda@gmail.com}"
+          ADMIN_PARTS="${ADMIN_LOCAL_PARTS:-bgmaduragoda}"
           cat > /tmp/run-env.yaml <<EOF
           NODE_ENV: production
           FIREBASE_USE_ADC: "true"
@@ -143,8 +170,8 @@ jobs:
           NEWS_SYNC_ON_STARTUP: "${NEWS_SYNC_ON_STARTUP:-true}"
           CANDLE_SYNC_SYMBOLS: "${CANDLE_SYNC_SYMBOLS}"
           FIREBASE_PROJECT_ID: "${FIREBASE_PROJECT_ID}"
-          ADMIN_EMAILS: "bgmaduragoda@gmail.com"
-          ADMIN_LOCAL_PARTS: "bgmaduragoda"
+          ADMIN_EMAILS: "${ADMIN_EMAIL_LIST}"
+          ADMIN_LOCAL_PARTS: "${ADMIN_PARTS}"
           EOF
 
       - name: Deploy to Cloud Run

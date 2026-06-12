@@ -35,7 +35,13 @@ export function createAuthRouter(userAdminService: UserAdminService): Router {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Bootstrap failed';
       console.error('[Auth] bootstrap error:', message);
-      res.status(500).json({ error: message });
+      const permissionDenied =
+        message.includes('PERMISSION_DENIED') || message.includes('insufficient permissions');
+      res.status(permissionDenied ? 503 : 500).json({
+        error: permissionDenied
+          ? 'Server cannot write user profiles. Grant Cloud Run service account roles/datastore.user and roles/firebaseauth.admin.'
+          : message,
+      });
     }
   });
 

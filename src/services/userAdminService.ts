@@ -79,10 +79,15 @@ export class UserAdminService {
 
     await ref.set(profile, { merge: true });
 
-    if (role === 'admin' && decoded.admin !== true) {
-      await admin.auth().setCustomUserClaims(uid, { admin: true });
-    } else if (role !== 'admin' && decoded.admin === true) {
-      await admin.auth().setCustomUserClaims(uid, { admin: false });
+    try {
+      if (role === 'admin' && decoded.admin !== true) {
+        await admin.auth().setCustomUserClaims(uid, { admin: true });
+      } else if (role !== 'admin' && decoded.admin === true) {
+        await admin.auth().setCustomUserClaims(uid, { admin: false });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[UserAdmin] Custom claims update skipped for ${uid}: ${message}`);
     }
 
     return profile;
