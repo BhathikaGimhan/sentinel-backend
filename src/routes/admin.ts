@@ -46,7 +46,12 @@ export function createAdminRouter(userAdminService: UserAdminService): Router {
         res.status(400).json({ error: 'Invalid role' });
         return;
       }
-      if (body.status && body.status !== 'active' && body.status !== 'disabled') {
+      if (
+        body.status &&
+        body.status !== 'pending' &&
+        body.status !== 'active' &&
+        body.status !== 'disabled'
+      ) {
         res.status(400).json({ error: 'Invalid status' });
         return;
       }
@@ -68,11 +73,14 @@ export function createAdminRouter(userAdminService: UserAdminService): Router {
     try {
       const users = await userAdminService.listUsers();
       const active = users.filter((u) => u.status === 'active').length;
+      const pending = users.filter((u) => u.status === 'pending').length;
+      const disabled = users.filter((u) => u.status === 'disabled').length;
       const admins = users.filter((u) => u.role === 'admin').length;
       res.json({
         total: users.length,
         active,
-        disabled: users.length - active,
+        pending,
+        disabled,
         admins,
       });
     } catch (err) {

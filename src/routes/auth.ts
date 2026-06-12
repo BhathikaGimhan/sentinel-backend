@@ -20,14 +20,16 @@ export function createAuthRouter(userAdminService: UserAdminService): Router {
 
       if (profile.status === 'disabled') {
         res.status(403).json({
-          error: 'Account disabled. Contact an administrator.',
+          error: 'Account rejected. Contact an administrator.',
           profile,
+          access: 'denied',
         });
         return;
       }
 
       res.json({
         profile,
+        access: profile.status === 'active' ? 'granted' : 'pending',
         claims: {
           admin: profile.role === 'admin',
         },
@@ -54,10 +56,13 @@ export function createAuthRouter(userAdminService: UserAdminService): Router {
         return;
       }
       if (profile.status === 'disabled') {
-        res.status(403).json({ error: 'Account disabled', profile });
+        res.status(403).json({ error: 'Account rejected', profile });
         return;
       }
-      res.json({ profile });
+      res.json({
+        profile,
+        access: profile.status === 'active' ? 'granted' : 'pending',
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Profile fetch failed';
       res.status(500).json({ error: message });

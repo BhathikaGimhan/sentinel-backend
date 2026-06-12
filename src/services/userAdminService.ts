@@ -64,7 +64,15 @@ export class UserAdminService {
 
     const role: UserRole =
       prior?.role === 'admin' || shouldBeAdmin ? 'admin' : 'user';
-    const status: UserStatus = prior?.status ?? 'active';
+
+    let status: UserStatus;
+    if (prior?.status) {
+      status = prior.status;
+    } else if (shouldBeAdmin) {
+      status = 'active';
+    } else {
+      status = 'pending';
+    }
 
     const profile: UserProfile = {
       uid,
